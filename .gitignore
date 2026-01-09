@@ -3,7 +3,7 @@
 .aptos/
 **/move/.aptos/
 **/move/build/
-
+.kiro
 # IDE
 /.vscode
 .idea/

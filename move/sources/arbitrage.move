@@ -21,6 +21,24 @@ module arbitrage::swap {
         burn_cap: BurnCapability<CoinType>,
     }
 
+    /// Contract treasury to hold all deposited funds
+    struct ContractTreasury has key {
+        apt_balance: u64,
+        usdc_balance: u64,
+        usdt_balance: u64,
+        total_users: u64,
+        total_deposits: u64,
+    }
+
+    /// User vault balances (on-chain tracking)
+    struct UserVault has key {
+        owner: address,
+        usdc_balance: u64,
+        usdt_balance: u64,
+        last_deposit: u64,
+        total_deposited: u64,
+    }
+
     #[event]
     struct ProfitEvent has drop, store {
         trader: address,
@@ -64,6 +82,17 @@ module arbitrage::swap {
         coin::destroy_freeze_cap(freeze_cap);
 
         move_to(deployer, TokenCapabilities<USDC> { mint_cap, burn_cap });
+
+        // Initialize contract treasury if not exists
+        if (!exists<ContractTreasury>(deployer_addr)) {
+            move_to(deployer, ContractTreasury {
+                apt_balance: 0,
+                usdc_balance: 0,
+                usdt_balance: 0,
+                total_users: 0,
+                total_deposits: 0,
+            });
+        };
     }
 
     /// Initialize USDT token (call once by deployer)
@@ -130,7 +159,7 @@ module arbitrage::swap {
     }
 
     /// Swap APT to USDC - Burns APT from user and mints USDC
-    public entry fun swap_apt_to_usdc(account: &signer, apt_amount: u64) acquires TokenCapabilities {
+    public entry fun swap_apt_to_usdc(account: &signer, apt_amount: u64) acquires TokenCapabilities, ContractTreasury {
         let module_addr = @arbitrage;
         assert!(exists<TokenCapabilities<USDC>>(module_addr), E_NOT_INITIALIZED);
 
@@ -140,9 +169,13 @@ module arbitrage::swap {
         let apt_balance = coin::balance<0x1::aptos_coin::AptosCoin>(trader);
         assert!(apt_balance >= apt_amount, E_INSUFFICIENT_BALANCE);
         
-        // Withdraw APT from user and burn it (transfer to module address)
+        // Withdraw APT from user and store in contract treasury
         let apt_coins = coin::withdraw<0x1::aptos_coin::AptosCoin>(account, apt_amount);
         coin::deposit(module_addr, apt_coins);
+
+        // Update contract treasury
+        let treasury = borrow_global_mut<ContractTreasury>(module_addr);
+        treasury.apt_balance = treasury.apt_balance + apt_amount;
 
         // Calculate USDC amount to mint
         let rate = 8000000 + ((apt_amount % 500000) as u64);

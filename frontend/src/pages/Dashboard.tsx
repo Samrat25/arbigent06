@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { 
-  Wallet, TrendingUp, Bot, Clock, ArrowRight, 
+  Wallet, TrendingUp, Bot, ArrowRight, 
   Shield, Vault, Activity, ExternalLink, RefreshCw 
 } from "lucide-react";
 import Header from "@/components/Header";
@@ -14,46 +13,45 @@ import { useVault } from "@/hooks/useVault";
 import { useMarketData } from "@/hooks/useMarketData";
 
 const Dashboard = () => {
-  const { connected, account } = useWallet();
+  const { connected } = useWallet();
   const { vault, isLoading: vaultLoading } = useVault();
   const { tokenPrices, opportunities, isLoading: marketLoading, refreshOpportunities } = useMarketData();
   
   // Calculate total vault value in USD
   const calculateTotalVaultValue = () => {
-    if (!vault || !tokenPrices) return { total: 0, aptBalance: 0, aptChange: 0 };
+    if (!vault || !tokenPrices) return { total: 0, aptBalance: 0 };
     
     let total = 0;
     let aptBalance = 0;
     
     vault.balances.forEach(balance => {
-      const price = tokenPrices[balance.coinSymbol];
+      const symbol = balance.coinSymbol.toUpperCase();
+      const price = tokenPrices[symbol];
       if (price) {
-        const balanceNum = parseFloat(balance.balance) || 0;
-        const priceNum = parseFloat(price.price.replace('$', '')) || 0;
+        const decimals = symbol === 'APT' ? 8 : 6;
+        const balanceNum = (parseFloat(balance.balance) || 0) / Math.pow(10, decimals);
+        const priceStr = price.price.replace('$', '').replace(',', '');
+        const priceNum = parseFloat(priceStr) || 0;
         const value = balanceNum * priceNum;
         total += value;
         
-        if (balance.coinSymbol === 'APT') {
+        if (symbol === 'APT') {
           aptBalance = balanceNum;
         }
       }
     });
     
-    return { 
-      total, 
-      aptBalance, 
-      aptChange: 0 // Would need historical data for real change calculation
-    };
+    return { total, aptBalance };
   };
 
   const vaultStats = calculateTotalVaultValue();
   const aptPrice = tokenPrices.APT?.price || '$0.00';
-  const aptChange = tokenPrices.APT?.change || '0.0%';
+  const aptChange = tokenPrices.APT?.change || '+0.0%';
 
   // Transform opportunities for display
-  const displayOpportunities = opportunities.slice(0, 5).map(opp => {
+  const displayOpportunities = (opportunities || []).slice(0, 5).map(opp => {
     const fromToken = opp.route.from_pair.split('_')[0].toUpperCase();
-    const toToken = opp.route.to_pair.split('_')[1].toUpperCase();
+    const toToken = opp.route.to_pair.split('_')[1]?.toUpperCase() || 'APT';
     
     return {
       pair: `${fromToken}/${toToken}`,
@@ -120,13 +118,13 @@ const Dashboard = () => {
               icon={Wallet}
               label="Total Vault Balance"
               value={`$${vaultStats.total.toFixed(2)}`}
-              subValue={`APT: ${vaultStats.aptBalance.toFixed(2)} (${aptChange})`}
+              subValue={`APT: ${vaultStats.aptBalance.toFixed(4)}`}
               delay={0}
             />
             <StatsCard 
               icon={TrendingUp}
               label="Total P/L"
-              value={`+$${vault?.totalRewardsEarned.toFixed(2) || '0.00'}`}
+              value={`+$${vault?.totalRewardsEarned?.toFixed(2) || '0.00'}`}
               subValue="All-time vault performance"
               trend={{ value: "0.0%", isPositive: true }}
               delay={0.1}
@@ -143,7 +141,6 @@ const Dashboard = () => {
               label="APT Price"
               value={aptPrice}
               subValue={`24h: ${aptChange}`}
-              trend={{ value: aptChange.replace(/[+\-]/, ''), isPositive: !aptChange.startsWith('-') }}
               delay={0.3}
             />
           </div>

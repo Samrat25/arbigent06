@@ -1,13 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
 import { apiService, MarketData, ArbitrageOpportunity } from '@/services/ApiService';
 
+// Coinbase API endpoints
+const COINBASE_APT_API = 'https://api.coinbase.com/v2/prices/APT-USD/spot';
+const COINBASE_USDC_API = 'https://api.coinbase.com/v2/prices/USDC-USD/spot';
+const COINBASE_USDT_API = 'https://api.coinbase.com/v2/prices/USDT-USD/spot';
+
 export interface TokenPrice {
   symbol: string;
   price: string;
+  priceNum: number;
   change: string;
-  isPositive: boolean;
-  volume24h?: string;
-  marketCap?: string;
+  marketCap: string;
+  volume24h: string;
 }
 
 export interface UseMarketDataReturn {
@@ -16,119 +21,135 @@ export interface UseMarketDataReturn {
   opportunities: ArbitrageOpportunity[];
   isLoading: boolean;
   error: string | null;
+  lastUpdated: Date | null;
   refreshMarketData: () => Promise<void>;
   refreshOpportunities: () => Promise<void>;
-  checkProfitability: (fromToken: string, toToken: string, amount: number) => Promise<ArbitrageOpportunity | null>;
 }
 
-export const useMarketData = (): UseMarketDataReturn => {
+export const useMarketData = (refreshInterval: number = 5000): UseMarketDataReturn => {
   const [marketData, setMarketData] = useState<MarketData | null>(null);
   const [tokenPrices, setTokenPrices] = useState<Record<string, TokenPrice>>({});
   const [opportunities, setOpportunities] = useState<ArbitrageOpportunity[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Refresh market data
-  const refreshMarketData = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-
+  const fetchMarketData = useCallback(async () => {
     try {
-      const response = await apiService.getMarketOverview();
+      setError(null);
       
-      if (response.success && response.data) {
-        setMarketData(response.data);
+      // Fetch live prices from Coinbase API
+      let aptPrice = 0;
+      let usdcPrice = 1;
+      let usdtPrice = 1;
+      
+      try {
+        const [aptResponse, usdcResponse, usdtResponse] = await Promise.all([
+          fetch(COINBASE_APT_API),
+          fetch(COINBASE_USDC_API),
+          fetch(COINBASE_USDT_API)
+        ]);
         
-        // Transform market data to token prices
-        const prices: Record<string, TokenPrice> = {};
+        if (aptResponse.ok) {
+          const aptData = await aptResponse.json();
+          aptPrice = parseFloat(aptData.data?.amount) || 0;
+        }
         
-        response.data.chains.forEach(chain => {
-          const symbol = chain.chain.toUpperCase();
-          const price = parseFloat(chain.current_price);
-          
-          prices[symbol] = {
-            symbol,
-            price: `$${price.toFixed(price < 1 ? 4 : 2)}`,
-            change: '+0.0%', // API doesn't provide 24h change
-            isPositive: true,
-            volume24h: chain.volume_24h,
-            marketCap: chain.market_cap
-          };
-        });
+        if (usdcResponse.ok) {
+          const usdcData = await usdcResponse.json();
+          usdcPrice = parseFloat(usdcData.data?.amount) || 1;
+        }
         
-        setTokenPrices(prices);
-      } else {
-        setError(response.error || 'Failed to load market data');
+        if (usdtResponse.ok) {
+          const usdtData = await usdtResponse.json();
+          usdtPrice = parseFloat(usdtData.data?.amount) || 1;
+        }
+      } catch (e) {
+        console.warn('Coinbase fetch failed:', e);
       }
+      
+      // Fetch additional market data from arbitrage API
+      const marketResponse = await apiService.getMarketOverview();
+      
+      if (marketResponse.success && marketResponse.data) {
+        setMarketData(marketResponse.data);
+      }
+      
+      // Build token prices with live Coinbase data
+      const prices: Record<string, TokenPrice> = {
+        APT: {
+          symbol: 'APT',
+          price: `$${aptPrice.toFixed(2)}`,
+          priceNum: aptPrice,
+          change: '+0.0%',
+          marketCap: marketResponse.data?.chains.find(c => c.chain === 'apt')?.market_cap || 'N/A',
+          volume24h: marketResponse.data?.chains.find(c => c.chain === 'apt')?.volume_24h || 'N/A'
+        },
+        USDC: {
+          symbol: 'USDC',
+          price: `$${usdcPrice.toFixed(4)}`,
+          priceNum: usdcPrice,
+          change: '+0.0%',
+          marketCap: 'N/A',
+          volume24h: 'N/A'
+        },
+        USDT: {
+          symbol: 'USDT',
+          price: `$${usdtPrice.toFixed(4)}`,
+          priceNum: usdtPrice,
+          change: '+0.0%',
+          marketCap: 'N/A',
+          volume24h: 'N/A'
+        }
+      };
+      
+      setTokenPrices(prices);
+      setLastUpdated(new Date());
     } catch (err) {
-      console.error('Market data error:', err);
-      setError('Failed to refresh market data');
+      console.error('Market data fetch error:', err);
+      setError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  // Refresh arbitrage opportunities
-  const refreshOpportunities = useCallback(async () => {
+  const fetchOpportunities = useCallback(async () => {
     try {
       const response = await apiService.findArbitrageOpportunities({
-        trade_amount: 1000, // Default $1000 trade amount
-        dex_fees: {
-          "Smart Contract": 0.30 // Default 0.3% fee
-        }
+        trade_amount: 1000,
+        dex_fees: { 'Smart Contract': 0.30 }
       });
       
       if (response.success && response.data?.opportunities?.top_opportunities) {
         setOpportunities(response.data.opportunities.top_opportunities);
       }
     } catch (err) {
-      console.error('Opportunities error:', err);
+      console.error('Opportunities fetch error:', err);
     }
   }, []);
 
-  // Check profitability for specific trade
-  const checkProfitability = useCallback(async (
-    fromToken: string, 
-    toToken: string, 
-    amount: number
-  ): Promise<ArbitrageOpportunity | null> => {
-    try {
-      const response = await apiService.checkProfitability({
-        from_token: fromToken.toLowerCase(),
-        to_token: toToken.toLowerCase(),
-        trade_amount: amount,
-        dex_fees: {
-          "Smart Contract": 0.30
-        }
-      });
-      
-      if (response.success && response.data) {
-        return response.data;
-      }
-      
-      return null;
-    } catch (err) {
-      console.error('Profitability check error:', err);
-      return null;
-    }
-  }, []);
+  const refreshMarketData = useCallback(async () => {
+    setIsLoading(true);
+    await fetchMarketData();
+  }, [fetchMarketData]);
 
-  // Load data on mount and set up refresh interval
+  const refreshOpportunities = useCallback(async () => {
+    setIsLoading(true);
+    await fetchOpportunities();
+    setIsLoading(false);
+  }, [fetchOpportunities]);
+
   useEffect(() => {
-    refreshMarketData();
-    refreshOpportunities();
+    fetchMarketData();
+    fetchOpportunities();
+  }, [fetchMarketData, fetchOpportunities]);
 
-    // Refresh market data every 30 seconds
-    const marketInterval = setInterval(refreshMarketData, 30000);
-    
-    // Refresh opportunities every 60 seconds
-    const opportunitiesInterval = setInterval(refreshOpportunities, 60000);
-
-    return () => {
-      clearInterval(marketInterval);
-      clearInterval(opportunitiesInterval);
-    };
-  }, [refreshMarketData, refreshOpportunities]);
+  useEffect(() => {
+    if (refreshInterval > 0) {
+      const interval = setInterval(fetchMarketData, refreshInterval);
+      return () => clearInterval(interval);
+    }
+  }, [fetchMarketData, refreshInterval]);
 
   return {
     marketData,
@@ -136,8 +157,8 @@ export const useMarketData = (): UseMarketDataReturn => {
     opportunities,
     isLoading,
     error,
+    lastUpdated,
     refreshMarketData,
-    refreshOpportunities,
-    checkProfitability
+    refreshOpportunities
   };
 };

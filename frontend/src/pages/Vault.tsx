@@ -89,19 +89,19 @@ const Vault = () => {
     const walletBalance = walletBalances[symbol] || '0';
     const priceData = tokenPrices[symbol];
     
-    // Calculate USD value
+    // Calculate USD value using priceNum (numeric price from Coinbase API)
     const balance = parseFloat(vaultBalance) || 0;
-    const price = priceData ? parseFloat(priceData.price.replace('$', '')) : 0;
+    const price = priceData?.priceNum || 0;
     const usdValue = balance * price;
     
     return {
       symbol,
       balance: vaultBalance,
       walletBalance,
-      usdValue: `$${usdValue.toFixed(2)}`,
-      price: priceData?.price || '$0.00',
+      usdValue: `${(Math.floor(usdValue * 100) / 100).toFixed(2)}`,
+      price: priceData ? `$${priceData.priceNum.toFixed(4)}` : '$0.00',
       change: priceData?.change || '0.0%',
-      isPositive: priceData?.isPositive ?? true
+      isPositive: priceData?.change?.startsWith('+') ?? true
     };
   };
 
@@ -310,46 +310,7 @@ const Vault = () => {
           </motion.div>
           
           {/* Debug Section - Temporary */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-            className="mb-8"
-          >
-            <WalletDebug />
-            
-            {/* Manual Balance Refresh */}
-            <div className="mt-4 p-4 border rounded-lg bg-muted">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-semibold">Current Wallet Balances (Frontend State)</h4>
-                <Button 
-                  onClick={async () => {
-                    if (account?.address) {
-                      console.log('🔄 Manual balance refresh triggered');
-                      const newBalances = await balanceService.refreshBalances(account.address);
-                      console.log('🔄 Refreshed balances:', newBalances);
-                      setWalletBalances(newBalances);
-                    }
-                  }}
-                  variant="outline"
-                  size="sm"
-                >
-                  Refresh Balances
-                </Button>
-              </div>
-              <div className="grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <p className="font-mono">APT: {walletBalances.APT || '0'}</p>
-                </div>
-                <div>
-                  <p className="font-mono">USDC: {walletBalances.USDC || '0'}</p>
-                </div>
-                <div>
-                  <p className="font-mono">USDT: {walletBalances.USDT || '0'}</p>
-                </div>
-              </div>
-            </div>
-          </motion.div>
+          
 
           {/* Balance Cards */}
           <motion.div

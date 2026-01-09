@@ -20,7 +20,7 @@ export interface ApiConfig {
 // API configuration
 export const API_CONFIG: ApiConfig = {
   backendUrl: import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001/api',
-  arbitrageApiUrl: import.meta.env.VITE_ARBITRAGE_API_URL || 'https://market-observer-agentic.vercel.app',
+  arbitrageApiUrl: import.meta.env.VITE_ARBITRAGE_API_URL || 'http://localhost:8000',
   timeout: 30000 // 30 seconds
 };
 

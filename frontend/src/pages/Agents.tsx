@@ -1,10 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { 
   ArrowLeft, Play, Square, Settings, Wallet, 
-  Activity, Zap, Shield, Target, Clock,
-  TrendingUp, AlertTriangle, CheckCircle, Search
+  Activity, Shield, RefreshCw
 } from "lucide-react";
 import Header from "@/components/Header";
 import PriceChart from "@/components/PriceChart";
@@ -12,15 +11,32 @@ import Terminal from "@/components/Terminal";
 import CryptoLogo from "@/components/CryptoLogo";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { useWallet } from "@/contexts/WalletContext";
+import { apiService } from "@/services/ApiService";
+import { useLivePrices } from "@/hooks/useLivePrices";
+
+// Coinbase API endpoints
+const COINBASE_APT_API = 'https://api.coinbase.com/v2/prices/APT-USD/spot';
+const COINBASE_USDC_API = 'https://api.coinbase.com/v2/prices/USDC-USD/spot';
+const COINBASE_USDT_API = 'https://api.coinbase.com/v2/prices/USDT-USD/spot';
+
+interface VaultTokenBalance {
+  token: 'APT' | 'USDC' | 'USDT';
+  amount: string;
+  usdValue: string;
+}
 
 const Agents = () => {
   const [minProfit, setMinProfit] = useState([0.5]);
   const [selectedPair, setSelectedPair] = useState("AUTO");
   const [riskLevel, setRiskLevel] = useState("MEDIUM");
   const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [vaultBalances, setVaultBalances] = useState<VaultTokenBalance[]>([]);
+  const [totalUsdValue, setTotalUsdValue] = useState("0.00");
+  const [isLoadingVault, setIsLoadingVault] = useState(false);
   
-  const isConnected = true;
-  const walletAddress = "0x1a2b3c4d5e6f7890abcdef1234567890abcd3f4c";
+  const { account, connected } = useWallet();
+  const { prices } = useLivePrices(1000);
   
   const pairs = [
     { value: "USDC_APT", label: "USDC → APT" },
@@ -45,12 +61,63 @@ const Agents = () => {
     { time: "10:34:42", type: "INFO" as const, message: "Market analysis complete", detail: "Analyzing 12 pairs across 4 DEXs" },
     { time: "10:34:48", type: "SCAN" as const, message: "Scanning Pontem DEX...", detail: "Potential opportunity detected" },
   ];
-  
-  const vaultBalances = [
-    { token: "APT" as const, amount: "500.0", usd: "$7,500.00" },
-    { token: "USDC" as const, amount: "250.0", usd: "$250.00" },
-    { token: "USDT" as const, amount: "100.0", usd: "$100.00" },
-  ];
+
+  // Fetch vault balances
+  const fetchVaultBalances = useCallback(async () => {
+    if (!connected || !account?.address) {
+      setVaultBalances([
+        { token: "APT", amount: "0.0000", usdValue: "0.00" },
+        { token: "USDC", amount: "0.00", usdValue: "0.00" },
+        { token: "USDT", amount: "0.00", usdValue: "0.00" },
+      ]);
+      setTotalUsdValue("0.00");
+      return;
+    }
+
+    setIsLoadingVault(true);
+    try {
+      const response = await apiService.getUserVault(account.address);
+      
+      if (response.success && response.data) {
+        let total = 0;
+        const balances: VaultTokenBalance[] = [];
+        
+        // Process each token
+        ['APT', 'USDC', 'USDT'].forEach(symbol => {
+          const vaultBalance = response.data!.balances.find(
+            b => b.coinSymbol.toUpperCase() === symbol
+          );
+          
+          const decimals = symbol === 'APT' ? 8 : 6;
+          const rawBalance = vaultBalance ? parseFloat(vaultBalance.balance) : 0;
+          const formattedBalance = rawBalance / Math.pow(10, decimals);
+          
+          // Calculate USD value using live prices
+          const price = prices[symbol as keyof typeof prices] || 0;
+          const usdValue = formattedBalance * price;
+          total += usdValue;
+          
+          balances.push({
+            token: symbol as 'APT' | 'USDC' | 'USDT',
+            amount: symbol === 'APT' ? formattedBalance.toFixed(4) : formattedBalance.toFixed(2),
+            usdValue: usdValue.toFixed(2)
+          });
+        });
+        
+        setVaultBalances(balances);
+        setTotalUsdValue(total.toFixed(2));
+      }
+    } catch (err) {
+      console.error('Failed to fetch vault balances:', err);
+    } finally {
+      setIsLoadingVault(false);
+    }
+  }, [connected, account?.address, prices]);
+
+  // Fetch balances on mount and when prices change
+  useEffect(() => {
+    fetchVaultBalances();
+  }, [fetchVaultBalances]);
 
   return (
     <div className="min-h-screen bg-background dark">
@@ -71,6 +138,54 @@ const Agents = () => {
               <ArrowLeft className="h-4 w-4" />
               Back to Dashboard
             </Link>
+          </motion.div>
+
+          {/* Vault Balances - Top Section */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="mb-6"
+          >
+            <div className="rounded-xl border border-border bg-card p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-display text-xl font-bold tracking-wide text-foreground flex items-center gap-2">
+                  <Wallet className="h-5 w-5 text-primary" />
+                  VAULT BALANCES
+                </h2>
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={fetchVaultBalances}
+                    disabled={isLoadingVault}
+                    className="h-8 px-3"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${isLoadingVault ? 'animate-spin' : ''}`} />
+                  </Button>
+                  <div className="text-right">
+                    <p className="text-xs text-muted-foreground">Total Value</p>
+                    <p className="font-mono font-bold text-lg text-primary">${totalUsdValue}</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-4">
+                {vaultBalances.map((balance) => (
+                  <div 
+                    key={balance.token} 
+                    className="p-4 rounded-lg bg-muted/50 border border-border"
+                  >
+                    <div className="flex items-center gap-3 mb-2">
+                      <CryptoLogo symbol={balance.token} size="sm" />
+                      <span className="font-mono text-sm text-muted-foreground">{balance.token}</span>
+                    </div>
+                    <p className="font-mono text-xl font-bold text-foreground">{balance.amount}</p>
+                    <p className="text-xs text-muted-foreground">${balance.usdValue}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
           </motion.div>
           
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -219,35 +334,6 @@ const Agents = () => {
                     </div>
                   )}
                 </div>
-              </div>
-              
-              {/* Vault Balances Widget */}
-              <div className="rounded-xl border border-border bg-card p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-display tracking-wide font-bold text-foreground flex items-center gap-2">
-                    <Wallet className="h-4 w-4 text-primary" />
-                    VAULT BALANCES
-                  </h3>
-                </div>
-                {vaultBalances.map((balance) => (
-                  <div key={balance.token} className="flex items-center justify-between py-3 border-b border-border last:border-0">
-                    <div className="flex items-center gap-3">
-                      <CryptoLogo symbol={balance.token} size="sm" />
-                      <span className="font-mono text-muted-foreground">{balance.token}</span>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-mono font-semibold text-foreground">{balance.amount}</p>
-                      <p className="text-xs text-muted-foreground">{balance.usd}</p>
-                    </div>
-                  </div>
-                ))}
-                <div className="mt-4 pt-3 border-t border-border flex justify-between items-center">
-                  <span className="text-sm text-muted-foreground">Total</span>
-                  <span className="font-mono font-bold text-lg text-primary">$7,850.00</span>
-                </div>
-                <Button variant="outline" size="sm" className="w-full mt-4" asChild>
-                  <Link to="/vault">Go to Vault →</Link>
-                </Button>
               </div>
             </motion.div>
             
