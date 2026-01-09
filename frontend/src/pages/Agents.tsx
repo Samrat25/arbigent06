@@ -3,7 +3,7 @@ import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { 
   ArrowLeft, Play, Square, Settings, Wallet, 
-  Activity, Shield, RefreshCw, TrendingUp, Zap
+  Activity, Shield, RefreshCw
 } from "lucide-react";
 import Header from "@/components/Header";
 import PriceChart from "@/components/PriceChart";
@@ -46,6 +46,7 @@ const Agents = () => {
     updateConfig,
     updateVaultBalances: updateAgentVaultBalances,
     updatePrices,
+    setWalletAddress,
   } = useArbiGent();
   
   const pairs = [
@@ -55,10 +56,11 @@ const Agents = () => {
     { value: "AUTO", label: "AUTO (All Pairs)" },
   ];
   
-  const riskLevels: { value: RiskLevel; maxTrade: string; gasLimit: string; stopLoss: string }[] = [
-    { value: "LOW", maxTrade: "$2,500", gasLimit: "0.003 APT", stopLoss: "-1%" },
-    { value: "MEDIUM", maxTrade: "$5,000", gasLimit: "0.005 APT", stopLoss: "-2%" },
-    { value: "HIGH", maxTrade: "$10,000", gasLimit: "0.01 APT", stopLoss: "-5%" },
+  const riskLevels: { value: RiskLevel; maxTrade: string; gasLimit: string }[] = [
+    { value: "LOW", maxTrade: "$2,500", gasLimit: "0.003 APT" },
+    { value: "MEDIUM", maxTrade: "$5,000", gasLimit: "0.005 APT" },
+    { value: "HIGH", maxTrade: "$10,000", gasLimit: "0.01 APT" },
+    { value: "VERY_HIGH", maxTrade: "$1,000,000", gasLimit: "0.05 APT" },
   ];
   
   const selectedRisk = riskLevels.find(r => r.value === riskLevel);
@@ -138,6 +140,13 @@ const Agents = () => {
   useEffect(() => {
     updatePrices(prices);
   }, [prices, updatePrices]);
+
+  // Set wallet address for MongoDB updates
+  useEffect(() => {
+    if (account?.address) {
+      setWalletAddress(account.address);
+    }
+  }, [account?.address, setWalletAddress]);
 
   // Update agent config when settings change
   useEffect(() => {
@@ -311,8 +320,8 @@ const Agents = () => {
                   <label className="text-sm text-muted-foreground mb-3 block font-display">
                     Risk Tolerance
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(["LOW", "MEDIUM", "HIGH"] as RiskLevel[]).map((level) => (
+                  <div className="grid grid-cols-4 gap-2">
+                    {(["LOW", "MEDIUM", "HIGH", "VERY_HIGH"] as RiskLevel[]).map((level) => (
                       <button
                         key={level}
                         onClick={() => !isRunning && setRiskLevel(level)}
@@ -334,8 +343,6 @@ const Agents = () => {
                         <span className="font-mono text-foreground">{selectedRisk.maxTrade}</span>
                         <span className="text-muted-foreground">Gas limit:</span>
                         <span className="font-mono text-foreground">{selectedRisk.gasLimit}</span>
-                        <span className="text-muted-foreground">Stop loss:</span>
-                        <span className="font-mono text-foreground">{selectedRisk.stopLoss}</span>
                       </div>
                     </div>
                   )}
@@ -371,19 +378,43 @@ const Agents = () => {
                         <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
                         <span className="font-display tracking-wide font-bold">AGENT ACTIVE</span>
                       </div>
-                      <p className="text-xs text-muted-foreground text-center">Running for: {runningDuration}</p>
+                      <p className="text-xs text-muted-foreground text-center mb-3">Running for: {runningDuration}</p>
                       
-                      {/* Agent Stats */}
-                      <div className="mt-3 pt-3 border-t border-success/20 grid grid-cols-2 gap-2 text-xs">
-                        <div className="flex items-center gap-1">
-                          <TrendingUp className="h-3 w-3 text-success" />
-                          <span className="text-muted-foreground">Profit:</span>
-                          <span className="font-mono text-success">+${agentState.totalProfit.toFixed(2)}</span>
+                      {/* Profit Display */}
+                      <div className="p-2 rounded bg-success/20 border border-success/30 mb-3">
+                        <div className="text-center">
+                          <p className="text-xs text-muted-foreground">Total Profit</p>
+                          <p className="font-mono text-xl font-bold text-success">
+                            +${agentState.totalProfit.toFixed(4)}
+                          </p>
                         </div>
-                        <div className="flex items-center gap-1">
-                          <Zap className="h-3 w-3 text-primary" />
-                          <span className="text-muted-foreground">Trades:</span>
-                          <span className="font-mono text-foreground">{agentState.tradesExecuted}</span>
+                      </div>
+                      
+                      {/* Agent Stats Grid */}
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="p-2 rounded bg-muted/50">
+                          <p className="text-muted-foreground">Trades</p>
+                          <p className="font-mono font-bold text-foreground">{agentState.tradesExecuted}</p>
+                        </div>
+                        <div className="p-2 rounded bg-muted/50">
+                          <p className="text-muted-foreground">Skipped</p>
+                          <p className="font-mono font-bold text-foreground">{agentState.tradesSkipped}</p>
+                        </div>
+                        <div className="p-2 rounded bg-muted/50">
+                          <p className="text-muted-foreground">Gas Fees</p>
+                          <p className="font-mono font-bold text-warning">${agentState.totalGasFees.toFixed(4)}</p>
+                        </div>
+                        <div className="p-2 rounded bg-muted/50">
+                          <p className="text-muted-foreground">Slippage</p>
+                          <p className="font-mono font-bold text-warning">${agentState.totalSlippage.toFixed(4)}</p>
+                        </div>
+                      </div>
+                      
+                      {/* Total Costs */}
+                      <div className="mt-2 p-2 rounded bg-muted/50 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Total Costs:</span>
+                          <span className="font-mono font-bold text-destructive">${agentState.totalCosts.toFixed(4)}</span>
                         </div>
                       </div>
                     </div>

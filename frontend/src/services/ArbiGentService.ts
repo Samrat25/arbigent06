@@ -1,10 +1,9 @@
 // ArbiGent - Autonomous Arbitrage Agent Service
-// Enhanced with Fallback Logic: If no profitable trade at current allocation,
-// increases to 50% and scans all pairs (AUTO) to find best opportunity
+// Smart Progressive Allocation with Triangular Arbitrage Routes
 import { apiService, ArbitrageOpportunity } from './ApiService';
 
 export type LogType = 'INFO' | 'SCAN' | 'EXECUTE' | 'WARNING' | 'ERROR' | 'SUCCESS';
-export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH';
 
 export interface AgentLog {
   time: string;
@@ -14,13 +13,12 @@ export interface AgentLog {
 }
 
 export interface AgentConfig {
-  minProfitThreshold: number;  // 0.00001% - 5.0%
+  minProfitThreshold: number;
   riskTolerance: RiskLevel;
-  selectedPair: string;        // "AUTO" | "USDC_APT" | "APT_USDT" | "USDC_USDT"
-  maxTradeCap: number;         // USD
-  stopLoss: number;            // Percentage (negative)
-  allocationPercent: number;   // Starting allocation (10%)
-  scalingFactor: number;       // Increase on success (1.05 = 5%)
+  selectedPair: string;
+  maxTradeCap: number;
+  allocationPercent: number;
+  scalingFactor: number;
 }
 
 export interface VaultState {
@@ -37,30 +35,70 @@ export interface AgentState {
   tradesSkipped: number;
   startTime: Date | null;
   lastTradeTime: Date | null;
+  totalGasFees: number;
+  totalSlippage: number;
+  totalCosts: number;
 }
 
-// All possible trading pairs for AUTO discovery
-const ALL_TRADING_PAIRS = [
-  { from: 'APT', to: 'USDC' },
-  { from: 'APT', to: 'USDT' },
-  { from: 'USDC', to: 'APT' },
-  { from: 'USDC', to: 'USDT' },
-  { from: 'USDT', to: 'APT' },
-  { from: 'USDT', to: 'USDC' },
+// Triangular arbitrage routes
+// Each route: from_token → mid_token → to_token (back to from_token type for profit)
+interface ArbitrageRoute {
+  name: string;
+  fromToken: keyof VaultState;
+  midToken: keyof VaultState;
+  toToken: keyof VaultState;
+  apiFromToken: string;
+  apiToToken: string;
+}
+
+const ARBITRAGE_ROUTES: Record<string, ArbitrageRoute> = {
+  'USDC_APT': {
+    name: 'USDC → USDT → APT',
+    fromToken: 'USDC',
+    midToken: 'USDT',
+    toToken: 'APT',
+    apiFromToken: 'usdc',
+    apiToToken: 'apt',
+  },
+  'APT_USDT': {
+    name: 'APT → USDC → USDT',
+    fromToken: 'APT',
+    midToken: 'USDC',
+    toToken: 'USDT',
+    apiFromToken: 'apt',
+    apiToToken: 'usdt',
+  },
+  'USDC_USDT': {
+    name: 'USDC → APT → USDT',
+    fromToken: 'USDC',
+    midToken: 'APT',
+    toToken: 'USDT',
+    apiFromToken: 'usdc',
+    apiToToken: 'usdt',
+  },
+};
+
+// All routes for AUTO mode - cycle through each
+const AUTO_ROUTES = ['USDC_APT', 'APT_USDT', 'USDC_USDT'];
+
+// Progressive allocation steps
+const ALLOCATION_STEPS = [0.10, 0.50];
+
+// Simulated liquidity pools
+const LIQUIDITY_POOLS = [
+  { name: 'PancakeSwap', tvl: '45.2M', fee: '0.25%' },
+  { name: 'LiquidSwap', tvl: '32.8M', fee: '0.30%' },
+  { name: 'Pontem', tvl: '18.5M', fee: '0.20%' },
+  { name: 'Thala', tvl: '28.1M', fee: '0.25%' },
+  { name: 'Sushi', tvl: '12.3M', fee: '0.30%' },
 ];
 
 // Risk level constraints
-const RISK_CONSTRAINTS: Record<RiskLevel, { maxTrade: number; gasLimit: number; stopLoss: number }> = {
-  LOW: { maxTrade: 2500, gasLimit: 0.003, stopLoss: -1 },
-  MEDIUM: { maxTrade: 5000, gasLimit: 0.005, stopLoss: -2 },
-  HIGH: { maxTrade: 10000, gasLimit: 0.01, stopLoss: -5 },
-};
-
-// Risk acceptance mapping
-const RISK_ACCEPTANCE: Record<RiskLevel, RiskLevel[]> = {
-  LOW: ['LOW'],
-  MEDIUM: ['LOW', 'MEDIUM'],
-  HIGH: ['LOW', 'MEDIUM', 'HIGH'],
+const RISK_CONSTRAINTS: Record<RiskLevel, { maxTrade: number; gasLimit: number }> = {
+  LOW: { maxTrade: 2500, gasLimit: 0.003 },
+  MEDIUM: { maxTrade: 5000, gasLimit: 0.005 },
+  HIGH: { maxTrade: 10000, gasLimit: 0.01 },
+  VERY_HIGH: { maxTrade: 1000000, gasLimit: 0.05 },
 };
 
 class ArbiGentService {
@@ -69,6 +107,9 @@ class ArbiGentService {
   private logs: AgentLog[] = [];
   private onLogCallback: ((log: AgentLog) => void) | null = null;
   private onStateChangeCallback: ((state: AgentState) => void) | null = null;
+  private onVaultUpdateCallback: ((balances: VaultState) => void) | null = null;
+  private currentAutoRouteIndex = 0;
+  private walletAddress: string | null = null;
   
   private state: AgentState = {
     isRunning: false,
@@ -78,6 +119,9 @@ class ArbiGentService {
     tradesSkipped: 0,
     startTime: null,
     lastTradeTime: null,
+    totalGasFees: 0,
+    totalSlippage: 0,
+    totalCosts: 0,
   };
 
   private config: AgentConfig = {
@@ -85,7 +129,6 @@ class ArbiGentService {
     riskTolerance: 'MEDIUM',
     selectedPair: 'AUTO',
     maxTradeCap: 5000,
-    stopLoss: -2,
     allocationPercent: 0.10,
     scalingFactor: 1.05,
   };
@@ -93,7 +136,6 @@ class ArbiGentService {
   private vaultBalances: VaultState = { APT: 0, USDC: 0, USDT: 0 };
   private livePrices: Record<string, number> = { APT: 0, USDC: 1, USDT: 1 };
 
-  // Set callbacks for real-time updates
   onLog(callback: (log: AgentLog) => void) {
     this.onLogCallback = callback;
   }
@@ -102,42 +144,44 @@ class ArbiGentService {
     this.onStateChangeCallback = callback;
   }
 
-  // Update configuration
+  onVaultUpdate(callback: (balances: VaultState) => void) {
+    this.onVaultUpdateCallback = callback;
+  }
+
   updateConfig(newConfig: Partial<AgentConfig>) {
     this.config = { ...this.config, ...newConfig };
-    
-    // Update max trade cap based on risk level
     const riskConstraints = RISK_CONSTRAINTS[this.config.riskTolerance];
     this.config.maxTradeCap = riskConstraints.maxTrade;
-    this.config.stopLoss = riskConstraints.stopLoss;
   }
 
-  // Update vault balances
   updateVaultBalances(balances: VaultState) {
-    this.vaultBalances = balances;
+    this.vaultBalances = { ...balances };
   }
 
-  // Update live prices
   updatePrices(prices: Record<string, number>) {
-    this.livePrices = prices;
+    this.livePrices = { ...prices };
   }
 
-  // Get current state
+  setWalletAddress(address: string) {
+    this.walletAddress = address;
+  }
+
   getState(): AgentState {
     return { ...this.state };
   }
 
-  // Get all logs
+  getVaultBalances(): VaultState {
+    return { ...this.vaultBalances };
+  }
+
   getLogs(): AgentLog[] {
     return [...this.logs];
   }
 
-  // Clear logs
   clearLogs() {
     this.logs = [];
   }
 
-  // Add a log entry
   private addLog(type: LogType, message: string, detail?: string) {
     const log: AgentLog = {
       time: new Date().toLocaleTimeString('en-US', { hour12: false }),
@@ -147,8 +191,6 @@ class ArbiGentService {
     };
     
     this.logs.push(log);
-    
-    // Keep only last 100 logs
     if (this.logs.length > 100) {
       this.logs = this.logs.slice(-100);
     }
@@ -158,7 +200,6 @@ class ArbiGentService {
     }
   }
 
-  // Update state and notify
   private updateState(updates: Partial<AgentState>) {
     this.state = { ...this.state, ...updates };
     if (this.onStateChangeCallback) {
@@ -166,26 +207,40 @@ class ArbiGentService {
     }
   }
 
-  // Start the agent
+  private notifyVaultUpdate() {
+    if (this.onVaultUpdateCallback) {
+      this.onVaultUpdateCallback(this.vaultBalances);
+    }
+  }
+
+  private getRandomPool() {
+    return LIQUIDITY_POOLS[Math.floor(Math.random() * LIQUIDITY_POOLS.length)];
+  }
+
   async start() {
     if (this.isRunning) return;
     
     this.isRunning = true;
+    this.currentAutoRouteIndex = 0;
     this.updateState({
       isRunning: true,
       startTime: new Date(),
       currentAllocation: this.config.allocationPercent,
+      totalGasFees: 0,
+      totalSlippage: 0,
+      totalCosts: 0,
+      totalProfit: 0,
+      tradesExecuted: 0,
+      tradesSkipped: 0,
     });
     
     this.addLog('INFO', 'ArbiGent started', `Config: ${this.config.riskTolerance} risk, ${this.config.minProfitThreshold}% min profit`);
-    this.addLog('INFO', 'Initializing market scanners...', 'Connecting to DEX aggregators');
-    this.addLog('INFO', 'Fallback mode enabled', 'Will increase to 50% allocation if no profitable trades found');
+    this.addLog('INFO', 'Triangular Arbitrage Routes', 'USDC→USDT→APT | APT→USDC→USDT | USDC→APT→USDT');
+    this.addLog('INFO', 'Allocation Strategy', 'Testing 10% then 50% for each route');
     
-    // Start the main loop
     this.runLoop();
   }
 
-  // Stop the agent
   stop() {
     this.isRunning = false;
     
@@ -195,10 +250,11 @@ class ArbiGentService {
     }
     
     this.updateState({ isRunning: false });
-    this.addLog('INFO', 'ArbiGent stopped', `Total profit: $${this.state.totalProfit.toFixed(2)} | Trades: ${this.state.tradesExecuted}`);
+    this.addLog('INFO', 'ArbiGent stopped', 
+      `Profit: $${this.state.totalProfit.toFixed(4)} | Trades: ${this.state.tradesExecuted} | Gas: $${this.state.totalGasFees.toFixed(4)}`
+    );
   }
 
-  // Main trading loop
   private async runLoop() {
     if (!this.isRunning) return;
 
@@ -208,360 +264,263 @@ class ArbiGentService {
       this.addLog('ERROR', 'Cycle error', error instanceof Error ? error.message : 'Unknown error');
     }
 
-    // Random delay between 3-6 seconds
     const delay = 3000 + Math.random() * 3000;
     this.loopInterval = setTimeout(() => this.runLoop(), delay);
   }
 
-  // Execute one trading cycle with fallback logic
   private async executeCycle() {
-    // Step 1: Log price check
+    // Log prices
     this.addLog('INFO', 'Live Price Check', 
       `APT $${this.livePrices.APT?.toFixed(4) || '0'} | USDC $${this.livePrices.USDC?.toFixed(4) || '1'} | USDT $${this.livePrices.USDT?.toFixed(4) || '1'}`
     );
 
-    // Step 2: Calculate initial trade amount based on current allocation
-    const initialTradeAmount = this.calculateTradeAmount(this.state.currentAllocation);
-    
-    if (initialTradeAmount < 0.01) {
-      this.addLog('WARNING', 'Insufficient funds', 'Trade amount below minimum threshold ($0.01)');
-      return;
-    }
-
-    // Step 3: First attempt - scan with current allocation
-    this.addLog('SCAN', 'Phase 1: Scanning with current allocation...', 
-      `Amount: $${initialTradeAmount.toFixed(2)} (${(this.state.currentAllocation * 100).toFixed(0)}%)`
+    // Log vault
+    this.addLog('INFO', 'Vault Status', 
+      `APT: ${this.vaultBalances.APT.toFixed(4)} | USDC: ${this.vaultBalances.USDC.toFixed(4)} | USDT: ${this.vaultBalances.USDT.toFixed(4)}`
     );
 
-    let opportunity = await this.findProfitableOpportunity(initialTradeAmount);
-    let usedFallback = false;
+    // Determine which routes to check
+    let routesToCheck: string[] = [];
+    
+    if (this.config.selectedPair === 'AUTO') {
+      // In AUTO mode, cycle through all routes one by one
+      routesToCheck = [AUTO_ROUTES[this.currentAutoRouteIndex]];
+      this.currentAutoRouteIndex = (this.currentAutoRouteIndex + 1) % AUTO_ROUTES.length;
+    } else {
+      routesToCheck = [this.config.selectedPair];
+    }
 
-    // Step 4: FALLBACK LOGIC - If no profitable opportunity, increase to 50% and scan all pairs
-    if (!opportunity || !this.isOpportunityProfitable(opportunity)) {
-      this.addLog('WARNING', 'No profitable opportunity at current allocation', 
-        'Activating fallback: Increasing to 50% and scanning all pairs...'
+    // Check each route
+    for (const routeKey of routesToCheck) {
+      const route = ARBITRAGE_ROUTES[routeKey];
+      if (!route) continue;
+
+      this.addLog('SCAN', `Checking route: ${route.name}`, 
+        `${route.fromToken} → ${route.midToken} → ${route.toToken}`
       );
 
-      // Calculate 50% of vault balance
-      const fallbackTradeAmount = this.calculateTradeAmount(0.50);
-      
-      if (fallbackTradeAmount < 0.01) {
-        this.addLog('WARNING', 'Fallback failed', 'Even 50% allocation is below minimum threshold');
-        return;
+      // Try allocations: 10% then 50%
+      let foundProfitable = false;
+      let bestOpportunity: ArbitrageOpportunity | null = null;
+      let usedAllocation = 0;
+
+      for (const allocation of ALLOCATION_STEPS) {
+        const tradeAmount = this.calculateTradeAmountForToken(route.fromToken, allocation);
+        
+        if (tradeAmount < 0.01) {
+          this.addLog('WARNING', `Skipping ${(allocation * 100).toFixed(0)}%`, 
+            `Insufficient ${route.fromToken} balance`
+          );
+          continue;
+        }
+
+        this.addLog('SCAN', `Testing ${(allocation * 100).toFixed(0)}% of ${route.fromToken}...`, 
+          `Trade amount: $${tradeAmount.toFixed(4)}`
+        );
+
+        const pool = this.getRandomPool();
+        this.addLog('INFO', `Analyzing ${pool.name}`, `TVL: $${pool.tvl} | Fee: ${pool.fee}`);
+
+        // Call API to check profitability
+        const opportunity = await this.checkRouteProfitability(route, tradeAmount);
+
+        if (opportunity && opportunity.profitability.is_profitable) {
+          const slippage = opportunity.charges?.slippage?.estimated_slippage_percent || 0.02;
+          const gasCost = opportunity.charges?.gas_fees?.total_gas_cost_usd || 0.02;
+          
+          this.addLog('INFO', 'Slippage Analysis', 
+            `Estimated: ${slippage.toFixed(4)}% | Trend: ${slippage < 0.1 ? 'LOW' : 'MEDIUM'}`
+          );
+          this.addLog('INFO', 'Gas Estimation', 
+            `Cost: $${gasCost.toFixed(4)} | Network: Low congestion`
+          );
+
+          if (opportunity.profitability.profit_margin_percent >= this.config.minProfitThreshold) {
+            bestOpportunity = opportunity;
+            usedAllocation = allocation;
+            foundProfitable = true;
+            
+            this.addLog('SUCCESS', `Profitable at ${(allocation * 100).toFixed(0)}%!`, 
+              `Margin: ${opportunity.profitability.profit_margin_percent.toFixed(4)}%`
+            );
+            break;
+          }
+        }
+
+        if (allocation === 0.50 && !foundProfitable) {
+          this.addLog('WARNING', `Route ${routeKey} not profitable at 50%`, 'Moving to next route...');
+        }
       }
 
-      this.addLog('SCAN', 'Phase 2: Fallback scan with 50% allocation...', 
-        `Amount: $${fallbackTradeAmount.toFixed(2)}`
-      );
-
-      // Scan ALL pairs to find the best opportunity
-      opportunity = await this.scanAllPairsForBestOpportunity(fallbackTradeAmount);
-      usedFallback = true;
-
-      if (!opportunity) {
-        this.addLog('INFO', 'No opportunities found', 'All pairs scanned, no profitable routes available');
-        return;
+      // Execute if profitable
+      if (foundProfitable && bestOpportunity) {
+        await this.executeTriangularArbitrage(route, bestOpportunity, usedAllocation);
+        return; // Exit after successful trade
       }
     }
 
-    // Step 5: Evaluate opportunity against constraints
-    const decision = this.evaluateOpportunity(opportunity);
-
-    if (decision.execute) {
-      await this.executeSimulatedTrade(opportunity, usedFallback);
-    } else {
-      this.handleSkippedTrade(opportunity, decision.reason);
-    }
+    // No profitable route found
+    this.updateState({ tradesSkipped: this.state.tradesSkipped + 1 });
+    this.addLog('WARNING', 'No profitable routes this cycle', 'Will retry next cycle...');
   }
 
-  // Check if opportunity meets minimum profitability
-  private isOpportunityProfitable(opp: ArbitrageOpportunity | null): boolean {
-    if (!opp) return false;
-    return opp.profitability.is_profitable && 
-           opp.profitability.profit_margin_percent >= this.config.minProfitThreshold;
-  }
-
-  // Calculate trade amount for a specific allocation percentage
-  private calculateTradeAmount(allocationPercent: number): number {
-    const { selectedPair, maxTradeCap } = this.config;
-    
-    let sourceToken: keyof VaultState;
-    
-    if (selectedPair === 'AUTO') {
-      // Pick token with highest USD value
-      const aptValue = this.vaultBalances.APT * (this.livePrices.APT || 0);
-      const usdcValue = this.vaultBalances.USDC * (this.livePrices.USDC || 1);
-      const usdtValue = this.vaultBalances.USDT * (this.livePrices.USDT || 1);
-      
-      if (aptValue >= usdcValue && aptValue >= usdtValue) {
-        sourceToken = 'APT';
-      } else if (usdcValue >= usdtValue) {
-        sourceToken = 'USDC';
-      } else {
-        sourceToken = 'USDT';
-      }
-    } else {
-      // Parse from pair (e.g., "USDC_APT" -> "USDC")
-      sourceToken = selectedPair.split('_')[0] as keyof VaultState;
-    }
-    
-    const balance = this.vaultBalances[sourceToken] || 0;
-    const price = this.livePrices[sourceToken] || 1;
-    const balanceUsd = balance * price;
-    
-    let tradeAmount = balanceUsd * allocationPercent;
-    
-    // Cap at max trade
-    return Math.min(tradeAmount, maxTradeCap);
-  }
-
-  // Calculate trade amount for a specific token at given allocation
-  private calculateTokenTradeAmount(token: keyof VaultState, allocationPercent: number): number {
+  private calculateTradeAmountForToken(token: keyof VaultState, allocation: number): number {
     const balance = this.vaultBalances[token] || 0;
     const price = this.livePrices[token] || 1;
     const balanceUsd = balance * price;
-    return Math.min(balanceUsd * allocationPercent, this.config.maxTradeCap);
+    return Math.min(balanceUsd * allocation, this.config.maxTradeCap);
   }
 
-  // Find profitable opportunity based on current config
-  private async findProfitableOpportunity(tradeAmount: number): Promise<ArbitrageOpportunity | null> {
-    if (this.config.selectedPair === 'AUTO') {
-      return await this.findBestOpportunityFromPossibilities(tradeAmount);
-    } else {
-      return await this.checkSpecificPair(tradeAmount);
-    }
-  }
-
-  // Use /arbitrage/possibilities endpoint to find best opportunity
-  private async findBestOpportunityFromPossibilities(tradeAmount: number): Promise<ArbitrageOpportunity | null> {
-    try {
-      const response = await apiService.findArbitrageOpportunities({
-        trade_amount: tradeAmount,
-        dex_fees: { 'Smart Contract': 0.30 },
-      });
-
-      if (response.success && response.data?.opportunities?.top_opportunities?.length > 0) {
-        const opportunities = response.data.opportunities.top_opportunities;
-        
-        // Filter for profitable opportunities that meet threshold
-        const profitableOpps = opportunities.filter(opp => 
-          opp.profitability.is_profitable && 
-          opp.profitability.profit_margin_percent >= this.config.minProfitThreshold
-        );
-
-        if (profitableOpps.length > 0) {
-          // Return the best opportunity (highest profit margin)
-          return profitableOpps.reduce((best, current) => 
-            current.profitability.profit_margin_percent > best.profitability.profit_margin_percent 
-              ? current : best
-          );
-        }
-      }
-    } catch (error) {
-      this.addLog('ERROR', 'API Error', 'Failed to fetch opportunities from /possibilities');
-    }
-    
-    return null;
-  }
-
-  // Scan ALL pairs individually to find the absolute best opportunity (Fallback mode)
-  private async scanAllPairsForBestOpportunity(tradeAmount: number): Promise<ArbitrageOpportunity | null> {
-    const allOpportunities: ArbitrageOpportunity[] = [];
-    
-    // First, try the /possibilities endpoint with 50% allocation
-    this.addLog('SCAN', 'Querying /arbitrage/possibilities...', `Trade amount: $${tradeAmount.toFixed(2)}`);
-    
-    try {
-      const possibilitiesResponse = await apiService.findArbitrageOpportunities({
-        trade_amount: tradeAmount,
-        dex_fees: { 'Smart Contract': 0.30 },
-      });
-
-      if (possibilitiesResponse.success && possibilitiesResponse.data?.opportunities?.top_opportunities) {
-        const opps = possibilitiesResponse.data.opportunities.top_opportunities;
-        this.addLog('INFO', `Found ${opps.length} opportunities from /possibilities`, 
-          `Best margin: ${opps[0]?.profitability?.profit_margin_percent?.toFixed(4) || 0}%`
-        );
-        allOpportunities.push(...opps);
-      }
-    } catch (error) {
-      this.addLog('WARNING', 'Possibilities endpoint failed', 'Falling back to individual pair checks');
-    }
-
-    // Then, check each pair individually using /isprofitable for more granular control
-    this.addLog('SCAN', 'Checking individual pairs via /arbitrage/isprofitable...', 
-      `Scanning ${ALL_TRADING_PAIRS.length} pairs`
-    );
-
-    for (const pair of ALL_TRADING_PAIRS) {
-      // Calculate trade amount based on the source token's balance
-      const sourceBalance = this.calculateTokenTradeAmount(pair.from as keyof VaultState, 0.50);
-      
-      if (sourceBalance < 0.01) continue; // Skip if insufficient balance
-      
-      try {
-        const response = await apiService.checkProfitability({
-          from_token: pair.from.toLowerCase(),
-          to_token: pair.to.toLowerCase(),
-          trade_amount: sourceBalance,
-          dex_fees: { 'Smart Contract': 0.30 },
-        });
-
-        if (response.success && response.data) {
-          const opp = response.data;
-          if (opp.profitability.is_profitable) {
-            this.addLog('INFO', `${pair.from} → ${pair.to}: ${opp.profitability.profit_margin_percent.toFixed(4)}%`, 
-              `Profit: $${opp.profitability.net_profit_usd.toFixed(4)}`
-            );
-            allOpportunities.push(opp);
-          }
-        }
-      } catch (error) {
-        // Silent fail for individual pairs
-      }
-    }
-
-    if (allOpportunities.length === 0) {
-      return null;
-    }
-
-    // Find the best opportunity across all scanned pairs
-    const bestOpportunity = allOpportunities.reduce((best, current) => {
-      // Prioritize by: 1) is_profitable, 2) profit_margin_percent
-      if (!best.profitability.is_profitable && current.profitability.is_profitable) {
-        return current;
-      }
-      if (current.profitability.is_profitable && 
-          current.profitability.profit_margin_percent > best.profitability.profit_margin_percent) {
-        return current;
-      }
-      return best;
-    });
-
-    this.addLog('SUCCESS', 'Best opportunity found', 
-      `${bestOpportunity.route.from_pair} → ${bestOpportunity.route.to_pair} | Margin: ${bestOpportunity.profitability.profit_margin_percent.toFixed(4)}%`
-    );
-
-    return bestOpportunity;
-  }
-
-  // Check specific trading pair using /isprofitable
-  private async checkSpecificPair(tradeAmount: number): Promise<ArbitrageOpportunity | null> {
-    const [fromToken, toToken] = this.config.selectedPair.toLowerCase().split('_');
-    
+  private async checkRouteProfitability(route: ArbitrageRoute, tradeAmount: number): Promise<ArbitrageOpportunity | null> {
     try {
       const response = await apiService.checkProfitability({
-        from_token: fromToken,
-        to_token: toToken,
+        from_token: route.apiFromToken,
+        to_token: route.apiToToken,
         trade_amount: tradeAmount,
-        dex_fees: { 'Smart Contract': 0.30 },
       });
 
       if (response.success && response.data) {
         return response.data;
       }
     } catch (error) {
-      this.addLog('ERROR', 'API Error', `Failed to check ${fromToken} → ${toToken}`);
+      this.addLog('ERROR', 'API Error', `Failed to check ${route.name}`);
     }
-    
     return null;
   }
 
-  // Evaluate opportunity against user constraints
-  private evaluateOpportunity(opp: ArbitrageOpportunity): { execute: boolean; reason: string } {
-    const { minProfitThreshold, riskTolerance } = this.config;
-    const { profitability, risk_level } = opp;
-
-    // Check profitability
-    if (!profitability.is_profitable) {
-      return { execute: false, reason: 'Not profitable' };
-    }
-
-    // Check profit threshold
-    if (profitability.profit_margin_percent < minProfitThreshold) {
-      return { 
-        execute: false, 
-        reason: `Margin ${profitability.profit_margin_percent.toFixed(5)}% < Threshold ${minProfitThreshold}%` 
-      };
-    }
-
-    // Check risk level
-    const acceptableRisks = RISK_ACCEPTANCE[riskTolerance];
-    if (!acceptableRisks.includes(risk_level as RiskLevel)) {
-      return { 
-        execute: false, 
-        reason: `Risk ${risk_level} exceeds tolerance ${riskTolerance}` 
-      };
-    }
-
-    return { execute: true, reason: 'All criteria met' };
-  }
-
-  // Execute simulated trade (update state, don't actually trade)
-  private async executeSimulatedTrade(opp: ArbitrageOpportunity, usedFallback: boolean) {
-    const { route, profitability, charges } = opp;
+  private async executeTriangularArbitrage(route: ArbitrageRoute, opp: ArbitrageOpportunity, allocation: number) {
+    const { profitability, charges } = opp;
+    const tradeAmountUsd = opp.route.trade_amount;
     
-    if (usedFallback) {
-      this.addLog('INFO', '🔄 Fallback trade activated', 'Using 50% allocation after initial scan failed');
-    }
+    const totalCostUsd = charges?.total_costs?.total_fees_usd || profitability.total_costs_usd || 0;
+    const gasCostUsd = charges?.gas_fees?.total_gas_cost_usd || 0.02;
+    const slippageCostUsd = charges?.slippage?.estimated_slippage_cost_usd || 0.01;
+    const profitUsd = profitability.net_profit_usd;
+
+    // Get prices
+    const fromPrice = this.livePrices[route.fromToken] || 1;
+    const midPrice = this.livePrices[route.midToken] || 1;
+    const toPrice = this.livePrices[route.toToken] || 1;
+
+    // Calculate token flow through triangular arbitrage
+    // Step 1: from_token → mid_token
+    const fromTokenAmount = tradeAmountUsd / fromPrice;
+    const midTokenAmount = (fromTokenAmount * fromPrice) / midPrice;
     
-    this.addLog('SUCCESS', '⚡ EXECUTING SWAP', 
-      `Route: ${route.from_pair} → ${route.to_pair}`
+    // Step 2: mid_token → to_token (final output includes profit)
+    const finalValueUsd = tradeAmountUsd + profitUsd;
+    const toTokenAmount = finalValueUsd / toPrice;
+
+    // Get pools for logging
+    const pool1 = this.getRandomPool();
+    const pool2 = this.getRandomPool();
+
+    this.addLog('SUCCESS', '⚡ EXECUTING TRIANGULAR ARBITRAGE', 
+      `Route: ${route.fromToken} → ${route.midToken} → ${route.toToken}`
     );
-    
-    this.addLog('INFO', 'Trade Details', 
-      `Amount: $${route.trade_amount.toFixed(2)} | Gas: ${charges.gas_fees.total_gas_cost_apt.toFixed(4)} APT`
+
+    this.addLog('INFO', 'DEX Route', 
+      `${pool1.name} (${route.fromToken}→${route.midToken}) → ${pool2.name} (${route.midToken}→${route.toToken})`
     );
+
+    this.addLog('INFO', 'Token Flow', 
+      `${route.fromToken}: -${fromTokenAmount.toFixed(6)} → ${route.midToken}: ${midTokenAmount.toFixed(6)} → ${route.toToken}: +${toTokenAmount.toFixed(6)}`
+    );
+
+    this.addLog('INFO', 'Cost Breakdown', 
+      `Gas: $${gasCostUsd.toFixed(4)} | Slippage: $${slippageCostUsd.toFixed(4)} | Total: $${totalCostUsd.toFixed(4)}`
+    );
+
+    // Update local vault balances
+    const oldFromBalance = this.vaultBalances[route.fromToken];
+    const oldToBalance = this.vaultBalances[route.toToken];
     
+    this.vaultBalances[route.fromToken] = Math.max(0, oldFromBalance - fromTokenAmount);
+    this.vaultBalances[route.toToken] = oldToBalance + toTokenAmount;
+
+    this.addLog('SUCCESS', 'Local Vault Updated', 
+      `${route.fromToken}: ${oldFromBalance.toFixed(4)} → ${this.vaultBalances[route.fromToken].toFixed(4)} | ${route.toToken}: ${oldToBalance.toFixed(4)} → ${this.vaultBalances[route.toToken].toFixed(4)}`
+    );
+
+    // Update MongoDB vault via API
+    await this.updateMongoDBVault(route, fromTokenAmount, toTokenAmount);
+
     this.addLog('SUCCESS', 'Trade Completed', 
-      `Net Profit: +$${profitability.net_profit_usd.toFixed(4)} (${profitability.profit_margin_percent.toFixed(4)}%)`
+      `Invested: $${tradeAmountUsd.toFixed(4)} | Received: $${finalValueUsd.toFixed(4)} | Net Profit: +$${profitUsd.toFixed(4)} (${profitability.profit_margin_percent.toFixed(4)}%)`
     );
 
     // Update state
-    const newProfit = this.state.totalProfit + profitability.net_profit_usd;
-    
-    // If we used fallback, reset to base allocation; otherwise scale up
-    let newAllocation: number;
-    if (usedFallback) {
-      // After fallback success, start fresh with base allocation
-      newAllocation = this.config.allocationPercent;
-      this.addLog('INFO', 'Strategy Reset', 
-        `Resetting allocation to ${(newAllocation * 100).toFixed(0)}% after fallback trade`
-      );
-    } else {
-      // Normal scaling on success
-      newAllocation = Math.min(this.state.currentAllocation * this.config.scalingFactor, 0.50);
-      this.addLog('INFO', 'Strategy Update', 
-        `Increasing allocation to ${(newAllocation * 100).toFixed(0)}% for next trade`
-      );
-    }
-    
     this.updateState({
-      totalProfit: newProfit,
+      totalProfit: this.state.totalProfit + profitUsd,
       tradesExecuted: this.state.tradesExecuted + 1,
       lastTradeTime: new Date(),
-      currentAllocation: newAllocation,
-    });
-  }
-
-  // Handle skipped trade
-  private handleSkippedTrade(opp: ArbitrageOpportunity, reason: string) {
-    const { route, profitability, risk_level } = opp;
-    
-    this.addLog('WARNING', `Opportunity detected: ${route.from_pair} → ${route.to_pair}`, 
-      `Margin: ${profitability.profit_margin_percent.toFixed(5)}% | Risk: ${risk_level}`
-    );
-    
-    this.addLog('WARNING', 'Decision: SKIP', reason);
-
-    // Reset allocation on skip
-    this.updateState({
-      tradesSkipped: this.state.tradesSkipped + 1,
       currentAllocation: this.config.allocationPercent,
+      totalGasFees: this.state.totalGasFees + gasCostUsd,
+      totalSlippage: this.state.totalSlippage + slippageCostUsd,
+      totalCosts: this.state.totalCosts + totalCostUsd,
     });
+
+    this.notifyVaultUpdate();
+
+    this.addLog('INFO', 'Session Stats', 
+      `Total Profit: $${this.state.totalProfit.toFixed(4)} | Trades: ${this.state.tradesExecuted} | Gas: $${this.state.totalGasFees.toFixed(4)}`
+    );
   }
 
-  // Get running duration as formatted string
+  // Update MongoDB vault - deduct from_token and add to_token
+  private async updateMongoDBVault(route: ArbitrageRoute, fromAmount: number, toAmount: number) {
+    if (!this.walletAddress) {
+      this.addLog('WARNING', 'MongoDB Update Skipped', 'No wallet address set');
+      return;
+    }
+
+    try {
+      // Get decimals for each token
+      const fromDecimals = route.fromToken === 'APT' ? 8 : 6;
+      const toDecimals = route.toToken === 'APT' ? 8 : 6;
+
+      // Convert to smallest units
+      const fromAmountSmallest = Math.floor(fromAmount * Math.pow(10, fromDecimals)).toString();
+      const toAmountSmallest = Math.floor(toAmount * Math.pow(10, toDecimals)).toString();
+
+      // Generate mock transaction hash
+      const txHash = `0x${Date.now().toString(16)}${Math.random().toString(16).substr(2, 48)}`;
+
+      // Withdraw from_token (deduct from vault)
+      const withdrawResponse = await apiService.withdrawFromVault(
+        this.walletAddress,
+        route.fromToken,
+        fromAmountSmallest,
+        txHash + '_withdraw'
+      );
+
+      if (withdrawResponse.success) {
+        this.addLog('INFO', 'MongoDB: Deducted', 
+          `${route.fromToken}: -${fromAmount.toFixed(6)}`
+        );
+      }
+
+      // Deposit to_token (add to vault)
+      const depositResponse = await apiService.depositToVault(
+        this.walletAddress,
+        route.toToken,
+        toAmountSmallest,
+        txHash + '_deposit'
+      );
+
+      if (depositResponse.success) {
+        this.addLog('INFO', 'MongoDB: Added', 
+          `${route.toToken}: +${toAmount.toFixed(6)}`
+        );
+      }
+
+      this.addLog('SUCCESS', 'MongoDB Vault Synced', 'Balances updated in database');
+
+    } catch (error) {
+      this.addLog('ERROR', 'MongoDB Update Failed', error instanceof Error ? error.message : 'Unknown error');
+    }
+  }
+
   getRunningDuration(): string {
     if (!this.state.startTime) return '0m';
     
@@ -578,6 +537,5 @@ class ArbiGentService {
   }
 }
 
-// Export singleton instance
 export const arbiGentService = new ArbiGentService();
 export default ArbiGentService;

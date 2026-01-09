@@ -15,6 +15,7 @@ export interface UseArbiGentReturn {
   logs: AgentLog[];
   agentState: AgentState;
   runningDuration: string;
+  localVaultBalances: VaultState;
   
   // Actions
   startAgent: () => void;
@@ -25,6 +26,7 @@ export interface UseArbiGentReturn {
   updateConfig: (config: Partial<AgentConfig>) => void;
   updateVaultBalances: (balances: VaultState) => void;
   updatePrices: (prices: Record<string, number>) => void;
+  setWalletAddress: (address: string) => void;
 }
 
 export const useArbiGent = (): UseArbiGentReturn => {
@@ -32,26 +34,28 @@ export const useArbiGent = (): UseArbiGentReturn => {
   const [logs, setLogs] = useState<AgentLog[]>([]);
   const [agentState, setAgentState] = useState<AgentState>(arbiGentService.getState());
   const [runningDuration, setRunningDuration] = useState('0m');
+  const [localVaultBalances, setLocalVaultBalances] = useState<VaultState>(arbiGentService.getVaultBalances());
   
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Set up callbacks on mount
   useEffect(() => {
-    // Log callback
     arbiGentService.onLog((log) => {
       setLogs(prev => [...prev.slice(-99), log]);
     });
 
-    // State change callback
     arbiGentService.onStateChange((state) => {
       setAgentState(state);
       setIsRunning(state.isRunning);
     });
 
-    // Load existing logs
+    arbiGentService.onVaultUpdate((balances) => {
+      setLocalVaultBalances({ ...balances });
+    });
+
     setLogs(arbiGentService.getLogs());
     setAgentState(arbiGentService.getState());
     setIsRunning(arbiGentService.getState().isRunning);
+    setLocalVaultBalances(arbiGentService.getVaultBalances());
 
     return () => {
       if (durationIntervalRef.current) {
@@ -60,7 +64,6 @@ export const useArbiGent = (): UseArbiGentReturn => {
     };
   }, []);
 
-  // Update running duration every second when agent is running
   useEffect(() => {
     if (isRunning) {
       durationIntervalRef.current = setInterval(() => {
@@ -100,10 +103,15 @@ export const useArbiGent = (): UseArbiGentReturn => {
 
   const updateVaultBalances = useCallback((balances: VaultState) => {
     arbiGentService.updateVaultBalances(balances);
+    setLocalVaultBalances({ ...balances });
   }, []);
 
   const updatePrices = useCallback((prices: Record<string, number>) => {
     arbiGentService.updatePrices(prices);
+  }, []);
+
+  const setWalletAddress = useCallback((address: string) => {
+    arbiGentService.setWalletAddress(address);
   }, []);
 
   return {
@@ -111,12 +119,14 @@ export const useArbiGent = (): UseArbiGentReturn => {
     logs,
     agentState,
     runningDuration,
+    localVaultBalances,
     startAgent,
     stopAgent,
     clearLogs,
     updateConfig,
     updateVaultBalances,
     updatePrices,
+    setWalletAddress,
   };
 };
 
