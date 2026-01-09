@@ -26,6 +26,15 @@ const Index = () => {
     setShowWalletPrompt(false);
   };
 
+  // Low-brightness animated background component (matches Vault.tsx style)
+  const AnimatedBackground = () => (
+    <div className="fixed inset-0 pointer-events-none">
+      <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/[0.07] rounded-full blur-3xl animate-pulse" />
+      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-orange-500/[0.07] rounded-full blur-3xl animate-pulse" style={{ animationDelay: "1s" }} />
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-r from-primary/[0.03] to-orange-500/[0.03] rounded-full blur-3xl" />
+    </div>
+  );
+
   const features = [
     {
       icon: Bot,
@@ -58,16 +67,14 @@ const Index = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-background noise-overlay dark">
+    <div className="min-h-screen bg-background noise-overlay dark relative overflow-hidden">
+      {/* Low-brightness animated background */}
+      <AnimatedBackground />
+      
       <Header />
       
       {/* Hero Section */}
       <section className="relative pt-28 pb-20 lg:pt-36 lg:pb-32">
-        {/* Background gradient effects */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-[120px] animate-float" />
-          <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-secondary/5 rounded-full blur-[100px] animate-float" style={{ animationDelay: '-1.5s' }} />
-        </div>
         
         <div className="container relative z-10 mx-auto px-4 lg:px-8">
           <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 items-center">

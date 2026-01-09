@@ -23,6 +23,15 @@ interface VaultTokenBalance {
   usdValue: string;
 }
 
+// Low-brightness animated background component (matches Vault.tsx style)
+const AnimatedBackground = () => (
+  <div className="fixed inset-0 pointer-events-none">
+    <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/[0.07] rounded-full blur-3xl animate-pulse" />
+    <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-orange-500/[0.07] rounded-full blur-3xl animate-pulse" style={{ animationDelay: "1s" }} />
+    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-r from-primary/[0.03] to-orange-500/[0.03] rounded-full blur-3xl" />
+  </div>
+);
+
 const Agents = () => {
   const [minProfit, setMinProfit] = useState([0.00001]);
   const [selectedPair, setSelectedPair] = useState("AUTO");
@@ -167,10 +176,11 @@ const Agents = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background dark">
+    <div className="min-h-screen bg-background dark relative overflow-hidden">
+      <AnimatedBackground />
       <Header />
       
-      <main className="pt-24 pb-16">
+      <main className="pt-24 pb-16 relative z-10">
         <div className="container mx-auto px-4 lg:px-8">
           {/* Back Link */}
           <motion.div

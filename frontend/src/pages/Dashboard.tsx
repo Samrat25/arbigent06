@@ -12,6 +12,15 @@ import { useWallet } from "@/contexts/WalletContext";
 import { useVault } from "@/hooks/useVault";
 import { useMarketData } from "@/hooks/useMarketData";
 
+// Low-brightness animated background component (matches Vault.tsx style)
+const AnimatedBackground = () => (
+  <div className="fixed inset-0 pointer-events-none">
+    <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/[0.07] rounded-full blur-3xl animate-pulse" />
+    <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-orange-500/[0.07] rounded-full blur-3xl animate-pulse" style={{ animationDelay: "1s" }} />
+    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-r from-primary/[0.03] to-orange-500/[0.03] rounded-full blur-3xl" />
+  </div>
+);
+
 const Dashboard = () => {
   const { connected } = useWallet();
   const { vault, isLoading: vaultLoading } = useVault();
@@ -75,16 +84,26 @@ const Dashboard = () => {
 
   if (!connected) {
     return (
-      <div className="min-h-screen bg-background dark">
+      <div className="min-h-screen bg-background dark relative overflow-hidden">
+        <AnimatedBackground />
         <Header />
-        <main className="pt-24 pb-16">
+        <main className="pt-24 pb-16 relative z-10">
           <div className="container mx-auto px-4 lg:px-8 text-center">
-            <h1 className="font-display text-4xl lg:text-5xl font-bold tracking-wide text-foreground mb-4">
+            <motion.h1 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="font-display text-4xl lg:text-5xl font-bold tracking-wide text-foreground mb-4"
+            >
               DASHBOARD
-            </h1>
-            <p className="text-muted-foreground mb-8">
+            </motion.h1>
+            <motion.p 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              className="text-muted-foreground mb-8"
+            >
               Please connect your wallet to access the dashboard.
-            </p>
+            </motion.p>
           </div>
         </main>
       </div>
@@ -92,10 +111,11 @@ const Dashboard = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background dark">
+    <div className="min-h-screen bg-background dark relative overflow-hidden">
+      <AnimatedBackground />
       <Header />
       
-      <main className="pt-24 pb-16">
+      <main className="pt-24 pb-16 relative z-10">
         <div className="container mx-auto px-4 lg:px-8">
           {/* Page Header */}
           <motion.div
