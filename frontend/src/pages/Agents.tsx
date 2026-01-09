@@ -26,6 +26,38 @@ interface VaultTokenBalance {
   usdValue: string;
 }
 
+// Low-brightness animated background component
+const AnimatedBackground = () => (
+  <div className="fixed inset-0 pointer-events-none overflow-hidden">
+    <motion.div 
+      className="absolute top-1/4 left-1/3 w-96 h-96 bg-primary/5 rounded-full blur-[150px]"
+      animate={{ 
+        scale: [1, 1.2, 1],
+        opacity: [0.03, 0.05, 0.03],
+        x: [0, 20, 0]
+      }}
+      transition={{ duration: 9, repeat: Infinity, ease: "easeInOut" }}
+    />
+    <motion.div 
+      className="absolute bottom-1/3 right-1/4 w-80 h-80 bg-emerald-500/5 rounded-full blur-[150px]"
+      animate={{ 
+        scale: [1.1, 1, 1.1],
+        opacity: [0.04, 0.06, 0.04],
+        y: [0, -25, 0]
+      }}
+      transition={{ duration: 11, repeat: Infinity, ease: "easeInOut", delay: 1.5 }}
+    />
+    <motion.div 
+      className="absolute top-1/2 left-1/4 w-72 h-72 bg-gradient-to-r from-blue-500/3 to-indigo-500/3 rounded-full blur-[120px]"
+      animate={{ 
+        rotate: [0, -90, 0],
+        scale: [1, 1.15, 1]
+      }}
+      transition={{ duration: 14, repeat: Infinity, ease: "easeInOut", delay: 3 }}
+    />
+  </div>
+);
+
 const Agents = () => {
   const [minProfit, setMinProfit] = useState([0.5]);
   const [selectedPair, setSelectedPair] = useState("AUTO");
@@ -120,10 +152,11 @@ const Agents = () => {
   }, [fetchVaultBalances]);
 
   return (
-    <div className="min-h-screen bg-background dark">
+    <div className="min-h-screen bg-background dark relative overflow-hidden">
+      <AnimatedBackground />
       <Header />
       
-      <main className="pt-24 pb-16">
+      <main className="pt-24 pb-16 relative z-10">
         <div className="container mx-auto px-4 lg:px-8">
           {/* Back Link */}
           <motion.div

@@ -16,8 +16,11 @@ const buttonVariants = cva(
         ghost: "hover:bg-muted hover:text-foreground",
         link: "text-primary underline-offset-4 hover:underline",
         hero: "font-display text-lg tracking-wide bg-foreground text-background hover:bg-foreground/90 hover:scale-105 hover:shadow-xl transition-all duration-300",
-        glow: "bg-primary text-primary-foreground hover:bg-primary/90 shadow-lg shadow-primary/30 hover:shadow-primary/50",
+        glow: "bg-gradient-to-r from-primary to-orange-500 text-white font-semibold hover:from-primary/90 hover:to-orange-500/90 shadow-lg shadow-primary/40 hover:shadow-primary/60 hover:scale-[1.02]",
         wallet: "border border-primary/50 bg-primary/10 text-foreground hover:bg-primary/20 hover:border-primary font-mono",
+        success: "bg-emerald-600 text-white hover:bg-emerald-700 shadow-md shadow-emerald-600/30 hover:shadow-emerald-600/50",
+        warning: "bg-amber-500 text-white hover:bg-amber-600 shadow-md shadow-amber-500/30 hover:shadow-amber-500/50",
+        info: "bg-sky-500 text-white hover:bg-sky-600 shadow-md shadow-sky-500/30 hover:shadow-sky-500/50",
       },
       size: {
         default: "h-10 px-4 py-2",

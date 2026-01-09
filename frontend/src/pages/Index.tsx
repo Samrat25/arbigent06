@@ -26,6 +26,40 @@ const Index = () => {
     setShowWalletPrompt(false);
   };
 
+  // Low-brightness animated background component
+  const AnimatedBackground = () => (
+    <div className="fixed inset-0 pointer-events-none overflow-hidden">
+      <motion.div 
+        className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-[150px]"
+        animate={{ 
+          scale: [1, 1.2, 1],
+          opacity: [0.03, 0.06, 0.03],
+          x: [0, 30, 0],
+          y: [0, -20, 0]
+        }}
+        transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div 
+        className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-orange-500/5 rounded-full blur-[150px]"
+        animate={{ 
+          scale: [1.2, 1, 1.2],
+          opacity: [0.04, 0.07, 0.04],
+          x: [0, -25, 0],
+          y: [0, 25, 0]
+        }}
+        transition={{ duration: 12, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+      />
+      <motion.div 
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-r from-primary/3 to-orange-500/3 rounded-full blur-[180px]"
+        animate={{ 
+          rotate: [0, 180, 360],
+          scale: [1, 1.1, 1]
+        }}
+        transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+      />
+    </div>
+  );
+
   const features = [
     {
       icon: Bot,
@@ -58,16 +92,14 @@ const Index = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-background noise-overlay dark">
+    <div className="min-h-screen bg-background noise-overlay dark relative overflow-hidden">
+      {/* Low-brightness animated background */}
+      <AnimatedBackground />
+      
       <Header />
       
       {/* Hero Section */}
       <section className="relative pt-28 pb-20 lg:pt-36 lg:pb-32">
-        {/* Background gradient effects */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 left-1/4 w-[500px] h-[500px] bg-primary/5 rounded-full blur-[120px] animate-float" />
-          <div className="absolute bottom-1/4 right-1/4 w-[400px] h-[400px] bg-secondary/5 rounded-full blur-[100px] animate-float" style={{ animationDelay: '-1.5s' }} />
-        </div>
         
         <div className="container relative z-10 mx-auto px-4 lg:px-8">
           <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 items-center">
