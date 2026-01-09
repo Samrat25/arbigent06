@@ -4,25 +4,12 @@ import { motion } from "framer-motion";
 import { Home, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-// Low-brightness animated background component
+// Low-brightness animated background component (matches Vault.tsx style)
 const AnimatedBackground = () => (
-  <div className="fixed inset-0 pointer-events-none overflow-hidden">
-    <motion.div 
-      className="absolute top-1/3 left-1/3 w-80 h-80 bg-primary/5 rounded-full blur-[150px]"
-      animate={{ 
-        scale: [1, 1.2, 1],
-        opacity: [0.03, 0.05, 0.03],
-      }}
-      transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-    />
-    <motion.div 
-      className="absolute bottom-1/3 right-1/3 w-72 h-72 bg-orange-500/5 rounded-full blur-[150px]"
-      animate={{ 
-        scale: [1.1, 1, 1.1],
-        opacity: [0.04, 0.06, 0.04],
-      }}
-      transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 }}
-    />
+  <div className="fixed inset-0 pointer-events-none">
+    <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/[0.07] rounded-full blur-3xl animate-pulse" />
+    <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-orange-500/[0.07] rounded-full blur-3xl animate-pulse" style={{ animationDelay: "1s" }} />
+    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-gradient-to-r from-primary/[0.03] to-orange-500/[0.03] rounded-full blur-3xl" />
   </div>
 );
 
